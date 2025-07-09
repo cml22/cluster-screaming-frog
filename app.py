@@ -5,141 +5,83 @@ from bs4 import BeautifulSoup
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
 
-st.set_page_config(page_title="Outil de Maillage Interne - Analyse Multi-Étapes", layout="wide")
-st.title("🔗 Outil de Maillage Interne - Analyse Multi-Étapes")
+st.set_page_config(page_title="Outil de Maillage Interne - Analyse", layout="wide")
+st.title("🔗 Outil de Maillage Interne - Analyse Automatique")
 
 # Étape 1 : Import du diagramme HTML
 st.header("Étape 1 : Importer votre diagramme de clusters (HTML)")
-uploaded_html = st.file_uploader("Importer votre fichier HTML de diagramme (Screaming Frog ou autre)", type=["html"])
+uploaded_html = st.file_uploader("Importer le fichier HTML de votre diagramme (exporté depuis Screaming Frog)", type=["html"])
 
 if uploaded_html:
     html_content = uploaded_html.read().decode("utf-8")
-    
-    # Note explicative sur le diagramme
-    with st.expander("ℹ️ Explication du diagramme de clusters"):
-        st.markdown("""
-Le diagramme de clusters de contenu est une visualisation bidimensionnelle des URL de votre crawl, tracées et regroupées en clusters à partir des embeddings (vecteurs sémantiques) générés par IA.
-
-**Les étapes clés :**
-- **Génération d’embeddings** : Chaque page reçoit un vecteur IA représentant sa signification.
-- **Échantillonnage** : Seul un sous-ensemble représentatif est affiché pour garder un diagramme lisible.
-- **Réduction de dimensionnalité** : Les vecteurs (souvent >100 dimensions) sont réduits en 2D pour l'affichage.
-- **Clustering** : Les points sont regroupés en clusters (couleurs différentes selon les groupes sémantiques).
-
-Ce diagramme aide à détecter les thématiques proches, les silos, et les opportunités de maillage interne.
-        """)
-
     st.components.v1.html(html_content, height=800, scrolling=True)
 
-    search_url = st.text_input("🔎 Recherche d'URL dans le diagramme (centrage auto)")
-    if search_url:
+    with st.expander("ℹ️ Explication du diagramme de clusters"):
         st.markdown("""
-Pour centrer automatiquement l'URL sur votre diagramme, votre fichier HTML doit contenir un identifiant ou un attribut associé aux URLs.
+Le diagramme de clusters de contenu est une représentation 2D des pages de votre site, regroupées selon leur proximité sémantique :
+- **Génération d’embeddings** : chaque URL reçoit un vecteur de signification.
+- **Échantillonnage** : un sous-ensemble est sélectionné pour la clarté visuelle.
+- **Réduction de dimensions** : pour afficher les points sur 2 axes.
+- **Clustering** : les groupes sont affichés en différentes couleurs pour identifier les silos thématiques.
 """)
-        st.code("""
-<script>
-function centerNode(url) {
-  const node = document.querySelector(`[data-url='${url}']`);
-  if (node) {
-    node.scrollIntoView({ behavior: 'smooth', block: 'center', inline: 'center' });
-    node.style.border = '2px solid red';
-  }
-}
-centerNode('%s');
-</script>
-""" % search_url, language='html')
 
-# Étape 2 : Import CSV pour maillage interne
-st.header("Étape 2 : Importer votre CSV d'URLs et contenus")
-uploaded_csv = st.file_uploader("Importer un fichier CSV (colonnes : url, keyword, content)", type=["csv"])
+    # Extraction des URLs et contenus depuis le HTML
+    soup = BeautifulSoup(html_content, 'html.parser')
+    urls = []
+    for a in soup.find_all('a', href=True):
+        urls.append(a['href'])
+    urls = list(set(urls))  # Uniques
 
-if uploaded_csv:
-    df = pd.read_csv(uploaded_csv)
-    st.write("Aperçu des données :", df.head())
+    st.success(f"{len(urls)} URLs extraites du diagramme.")
 
-    # TF-IDF sur toutes les URLs du crawl
-    corpus = df['keyword'].fillna('') + " " + df.get('content', pd.Series([''] * len(df)))
-    vectorizer = TfidfVectorizer()
-    tfidf_matrix = vectorizer.fit_transform(corpus)
-    cosine_sim = cosine_similarity(tfidf_matrix)
+    # Étape 2 : Analyse automatique
+    st.header("Étape 2 : Analyse d'une URL ou d'un contenu texte")
+    method = st.radio("Choisissez votre méthode :", ["URL", "Texte brut"])
 
-    # Maillage sortant
-    maillage = []
-    for i, url in enumerate(df['url']):
-        sim_scores = list(enumerate(cosine_sim[i]))
-        sim_scores = [x for x in sim_scores if x[0] != i]
-        sim_scores.sort(key=lambda x: x[1], reverse=True)
-        top_outgoing = sim_scores[:5]
-        for idx, score in top_outgoing:
-            kw1 = df.at[i, 'keyword'].lower().split()
-            kw2 = df.at[idx, 'keyword'].lower().split()
-            anchor = ", ".join(set(kw1) & set(kw2)) or "—"
-            maillage.append({
-                'from_url': url,
-                'to_url': df.at[idx, 'url'],
-                'similarity': score,
-                'anchor': anchor
-            })
-    maillage_df = pd.DataFrame(maillage)
-    st.subheader("🔗 Maillage interne automatique (liens sortants)")
-    st.dataframe(maillage_df)
+    if method == "URL":
+        url_input = st.text_input("Entrez une URL")
+        if url_input:
+            try:
+                response = requests.get(url_input, timeout=10)
+                page_soup = BeautifulSoup(response.text, 'html.parser')
+                input_text = page_soup.get_text(separator=' ', strip=True)
+                st.success("Contenu récupéré avec succès.")
+            except Exception as e:
+                st.error(f"Erreur lors de la récupération de l'URL : {e}")
+                input_text = ""
+    else:
+        input_text = st.text_area("Collez votre contenu ici")
 
-# Étape 3 : Analyse en Bulk
-st.header("Étape 3 : Analyse Bulk d'URLs ou de contenus")
-bulk_option = st.radio("Méthode d'import :", ["Importer un CSV", "Entrer manuellement"])
+    if input_text:
+        # Téléchargement du contenu des URLs du diagramme
+        diagram_texts = []
+        for u in urls:
+            try:
+                r = requests.get(u, timeout=5)
+                s = BeautifulSoup(r.text, 'html.parser')
+                text = s.get_text(separator=' ', strip=True)
+                diagram_texts.append(text)
+            except Exception:
+                diagram_texts.append("")
 
-if bulk_option == "Importer un CSV":
-    bulk_file = st.file_uploader("Importer votre CSV (colonnes : url, content)", type=["csv"], key="bulk_csv")
-    if bulk_file:
-        bulk_df = pd.read_csv(bulk_file)
-        st.write("Contenus importés :", bulk_df.head())
-elif bulk_option == "Entrer manuellement":
-    urls_input = st.text_area("Collez ici vos URLs (1 par ligne)")
-    contents_input = st.text_area("Collez ici vos contenus (1 par ligne, dans le même ordre que les URLs)")
-    if urls_input and contents_input:
-        urls = urls_input.strip().split('\n')
-        contents = contents_input.strip().split('\n')
-        bulk_df = pd.DataFrame({'url': urls, 'content': contents})
+        # Analyse de similarité TF-IDF
+        corpus = diagram_texts + [input_text]
+        vectorizer = TfidfVectorizer()
+        tfidf_matrix = vectorizer.fit_transform(corpus)
 
-if 'bulk_df' in locals():
-    bulk_corpus = bulk_df['content'].fillna('') + " " + bulk_df.get('url', pd.Series([''] * len(bulk_df)))
-    combined_corpus = pd.concat([pd.Series(corpus), pd.Series(bulk_corpus)], ignore_index=True)
-    tfidf_matrix = vectorizer.fit_transform(combined_corpus)
-    
-    # Analyse entre bulk et diagramme
-    bulk_results = []
-    for i in range(len(df), len(combined_corpus)):
-        sim_scores = cosine_similarity(tfidf_matrix[i], tfidf_matrix[:len(df)]).flatten()
-        top_matches = sim_scores.argsort()[::-1][:5]
-        for idx in top_matches:
-            kw1 = bulk_corpus.iloc[i - len(df)].lower().split()
-            kw2 = corpus.iloc[idx].lower().split()
-            anchor = ", ".join(set(kw1) & set(kw2)) or "—"
-            bulk_results.append({
-                'source_bulk_url': bulk_df.iloc[i - len(df)]['url'],
-                'target_site_url': df.iloc[idx]['url'],
-                'similarity': sim_scores[idx],
-                'anchor': anchor
-            })
-    bulk_df_outgoing = pd.DataFrame(bulk_results)
-    st.subheader("🔗 Suggestions de maillage sortant (depuis votre bulk vers votre site)")
-    st.dataframe(bulk_df_outgoing)
+        similarities = cosine_similarity(tfidf_matrix[-1], tfidf_matrix[:-1]).flatten()
+        df = pd.DataFrame({'url': urls, 'similarity': similarities})
 
-    # Analyse liens entrants (site → bulk)
-    bulk_results_in = []
-    for i in range(len(df)):
-        sim_scores = cosine_similarity(tfidf_matrix[i], tfidf_matrix[len(df):]).flatten()
-        top_matches = sim_scores.argsort()[::-1][:5]
-        for idx in top_matches:
-            kw1 = corpus.iloc[i].lower().split()
-            kw2 = bulk_corpus.iloc[idx].lower().split()
-            anchor = ", ".join(set(kw1) & set(kw2)) or "—"
-            bulk_results_in.append({
-                'site_url': df.iloc[i]['url'],
-                'bulk_target_url': bulk_df.iloc[idx]['url'],
-                'similarity': sim_scores[idx],
-                'anchor': anchor
-            })
-    bulk_df_incoming = pd.DataFrame(bulk_results_in)
-    st.subheader("🔗 Suggestions de maillage entrant (depuis votre site vers votre bulk)")
-    st.dataframe(bulk_df_incoming)
+        # Tableau 1 : Maillage sortant (depuis mon contenu vers diagramme)
+        outgoing_links = df.sort_values(by='similarity', ascending=False).head(10)
+        outgoing_links['anchor'] = outgoing_links['url'].apply(lambda u: " ".join(set(input_text.lower().split()) & set(u.lower().split())) or "—")
+
+        st.subheader("🔗 Maillage sortant suggéré (vers des pages du diagramme)")
+        st.dataframe(outgoing_links[['url', 'similarity', 'anchor']])
+
+        # Tableau 2 : Maillage entrant (pages du diagramme qui pourraient faire un lien vers mon contenu)
+        incoming_links = outgoing_links.copy()
+        st.subheader("🔗 Maillage entrant suggéré (depuis des pages du diagramme vers votre contenu)")
+        st.dataframe(incoming_links[['url', 'similarity', 'anchor']])
+else:
+    st.info("Veuillez d'abord importer votre fichier HTML du diagramme.")
